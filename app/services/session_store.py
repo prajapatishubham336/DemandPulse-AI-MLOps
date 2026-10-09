@@ -1,8 +1,10 @@
+
 import uuid
 import pickle
 from pathlib import Path
 
-SESSION_DIR = Path("data/sessions")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SESSION_DIR = PROJECT_ROOT / "data" / "sessions"
 SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
 SESSIONS = {}
@@ -14,30 +16,21 @@ def _session_file(session_id):
 
 def create_session(data, metadata=None):
     session_id = str(uuid.uuid4())
+    session = {"data": data.copy(), "metadata": metadata or {}}
 
-    session = {
-        "data": data.copy(),
-        "metadata": metadata or {}
-    }
+    session_file = _session_file(session_id)
+    with open(session_file, "wb") as f:
+        pickle.dump(session, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # Memory
     SESSIONS[session_id] = session
-
-    # Disk persistence
-    with open(_session_file(session_id), "wb") as f:
-        pickle.dump(session, f)
-
     return session_id
 
 
 def get_session(session_id):
-    # First check memory
     if session_id in SESSIONS:
         return SESSIONS[session_id]
 
-    # Then restore from disk
     session_file = _session_file(session_id)
-
     if not session_file.exists():
         raise KeyError("Session not found or expired.")
 
@@ -48,13 +41,12 @@ def get_session(session_id):
         SESSIONS[session_id] = session
         return session
 
-    except Exception:
-        raise KeyError("Session not found or expired.")
+    except Exception as exc:
+        raise KeyError("Session not found or expired.") from exc
 
 
 def delete_session(session_id):
     SESSIONS.pop(session_id, None)
-
     session_file = _session_file(session_id)
 
     if session_file.exists():
