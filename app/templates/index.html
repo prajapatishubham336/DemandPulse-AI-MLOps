@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DemandPulse AI</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+
+<body>
+
+<div class="app">
+
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo">DP</div>
+            <div>
+                <h1>DemandPulse AI</h1>
+                <p>Demand Forecasting & Inventory Intelligence</p>
+            </div>
+        </div>
+
+        <div class="status">
+            <span class="dot"></span>
+            AI Engine Ready
+        </div>
+    </header>
+
+
+    <section class="hero">
+        <div class="tag">AI-POWERED FORECASTING</div>
+
+        <h2>
+            Turn your sales data into
+            <span>smarter inventory decisions.</span>
+        </h2>
+
+        <p>
+            Upload any reasonable sales or demand dataset.
+            DemandPulse automatically detects the data structure,
+            analyzes demand behavior, selects the best forecasting model
+            and provides inventory recommendations.
+        </p>
+    </section>
+
+
+    <!-- UPLOAD -->
+
+    <section class="card upload-card" id="uploadSection">
+
+        <div class="upload-zone">
+
+            <div class="upload-icon">📊</div>
+
+            <h3>Upload your sales dataset</h3>
+
+            <p>
+                CSV, XLSX or XLS • Flexible columns • No fixed row count
+            </p>
+
+            <input
+                type="file"
+                id="fileInput"
+                accept=".csv,.xlsx,.xls"
+            >
+
+            <button
+                class="btn btn-primary"
+                onclick="document.getElementById('fileInput').click()"
+            >
+                Choose Dataset
+            </button>
+
+            <p id="selectedFile" class="loading"></p>
+
+        </div>
+
+    </section>
+
+
+    <div id="alertBox" class="alert error"></div>
+
+
+    <!-- WORKSPACE -->
+
+    <section class="workspace" id="workspace">
+
+
+        <!-- CONTROLS -->
+
+        <div class="card toolbar">
+
+            <div class="field">
+                <label>Product</label>
+                <select id="productSelect"></select>
+            </div>
+
+            <div class="field">
+                <label>Store</label>
+                <select id="storeSelect"></select>
+            </div>
+
+            <div class="field">
+                <label>Forecast Horizon</label>
+
+                <div class="horizon">
+
+                    <button
+                        data-days="7"
+                        onclick="setHorizon(7)"
+                    >
+                        7D
+                    </button>
+
+                    <button
+                        data-days="30"
+                        class="active"
+                        onclick="setHorizon(30)"
+                    >
+                        30D
+                    </button>
+
+                    <button
+                        data-days="60"
+                        onclick="setHorizon(60)"
+                    >
+                        60D
+                    </button>
+
+                    <button
+                        data-days="90"
+                        onclick="setHorizon(90)"
+                    >
+                        90D
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <div class="field">
+                <label>Current Stock</label>
+
+                <input
+                    type="number"
+                    id="stockInput"
+                    min="0"
+                    value="0"
+                >
+            </div>
+
+
+            <div class="field">
+                <label>Lead Time (Days)</label>
+
+                <input
+                    type="number"
+                    id="leadTimeInput"
+                    min="1"
+                    value="7"
+                >
+            </div>
+
+
+            <div class="field">
+                <label>Safety Stock (Days)</label>
+
+                <input
+                    type="number"
+                    id="safetyInput"
+                    min="0"
+                    value="3"
+                >
+            </div>
+
+
+            <div class="action-row">
+
+                <button
+                    class="btn btn-primary"
+                    id="forecastBtn"
+                    onclick="runForecast()"
+                >
+                    Run Forecast
+                </button>
+
+                <button
+                    class="btn btn-secondary"
+                    onclick="downloadForecast()"
+                    id="downloadBtn"
+                    disabled
+                >
+                    Download
+                </button>
+
+                <button
+                    class="btn btn-danger"
+                    onclick="resetApp()"
+                >
+                    Reset
+                </button>
+
+                <span
+                    class="loading"
+                    id="loadingText"
+                >
+                    AI models are analyzing your data...
+                </span>
+
+            </div>
+
+        </div>
+
+
+        <!-- METRICS -->
+
+        <div class="metrics">
+
+            <div class="card metric">
+                <small>Selected Model</small>
+                <strong id="modelValue">—</strong>
+                <span id="segmentValue">Demand segment</span>
+            </div>
+
+            <div class="card metric">
+                <small>Forecast Accuracy</small>
+                <strong id="wapeValue">—</strong>
+                <span>WAPE</span>
+            </div>
+
+            <div class="card metric">
+                <small>Average Demand</small>
+                <strong id="avgDemandValue">—</strong>
+                <span>Units / period</span>
+            </div>
+
+            <div class="card metric">
+                <small>Forecast Demand</small>
+                <strong id="forecastDemandValue">—</strong>
+                <span>Selected horizon</span>
+            </div>
+
+        </div>
+
+
+        <div class="dashboard-grid">
+
+            <!-- LEFT -->
+
+            <div>
+
+
+                <!-- FORECAST CHART -->
+
+                <div class="card panel">
+
+                    <div class="panel-title">
+                        <h3>Demand Forecast</h3>
+                        <span id="chartSubtitle">
+                            Historical + predicted demand
+                        </span>
+                    </div>
+
+                    <div class="chart-wrap">
+                        <canvas id="forecastChart"></canvas>
+                    </div>
+
+                </div>
+
+
+                <!-- MODEL COMPARISON -->
+
+                <div class="card panel">
+
+                    <div class="panel-title">
+                        <h3>Model Intelligence</h3>
+                        <span>Automatic model selection</span>
+                    </div>
+
+                    <div
+                        class="model-list"
+                        id="modelList"
+                    ></div>
+
+                </div>
+
+
+                <!-- PRODUCT COMPARISON -->
+
+                <div class="card panel">
+
+                    <div class="panel-title">
+                        <h3>Product Comparison</h3>
+                        <span>Compare future demand</span>
+                    </div>
+
+                    <div class="compare-grid">
+
+                        <div class="field">
+                            <label>Product A</label>
+                            <select id="compareProduct1"></select>
+                        </div>
+
+                        <div class="field">
+                            <label>Product B</label>
+                            <select id="compareProduct2"></select>
+                        </div>
+
+                    </div>
+
+                    <div class="action-row">
+
+                        <button
+                            class="btn btn-secondary"
+                            onclick="compareProducts()"
+                        >
+                            Compare Products
+                        </button>
+
+                    </div>
+
+                    <div
+                        class="table-wrap"
+                        style="margin-top:18px"
+                    >
+                        <table>
+
+                            <thead>
+                                <tr>
+                                    <th>Product</th>
+                                    <th>Model</th>
+                                    <th>Segment</th>
+                                    <th>Total Forecast</th>
+                                </tr>
+                            </thead>
+
+                            <tbody id="compareTable">
+                                <tr>
+                                    <td colspan="4">
+                                        Run comparison to see results.
+                                    </td>
+                                </tr>
+                            </tbody>
+
+                        </table>
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- RIGHT -->
+
+            <div>
+
+
+                <!-- INVENTORY -->
+
+                <div class="card panel">
+
+                    <div class="panel-title">
+                        <h3>Inventory Intelligence</h3>
+                        <span id="inventoryStatus">—</span>
+                    </div>
+
+                    <div
+                        class="inventory-grid"
+                        id="inventoryGrid"
+                    >
+
+                        <div class="inventory-item">
+                            <small>Current Stock</small>
+                            <strong>—</strong>
+                        </div>
+
+                        <div class="inventory-item">
+                            <small>Reorder Point</small>
+                            <strong>—</strong>
+                        </div>
+
+                        <div class="inventory-item">
+                            <small>Safety Stock</small>
+                            <strong>—</strong>
+                        </div>
+
+                        <div class="inventory-item">
+                            <small>Reorder Quantity</small>
+                            <strong>—</strong>
+                        </div>
+
+                        <div class="inventory-item">
+                            <small>Lead-Time Demand</small>
+                            <strong>—</strong>
+                        </div>
+
+                        <div class="inventory-item">
+                            <small>Stock After Forecast</small>
+                            <strong>—</strong>
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- DATASET INSIGHTS -->
+
+                <div class="card panel">
+
+                    <div class="panel-title">
+                        <h3>Dataset Insights</h3>
+                        <span>AI analysis</span>
+                    </div>
+
+                    <div
+                        class="insight-list"
+                        id="insightList"
+                    >
+
+                        <div class="insight">
+                            <span>Total Demand</span>
+                            <strong>—</strong>
+                        </div>
+
+                        <div class="insight">
+                            <span>Average Demand</span>
+                            <strong>—</strong>
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- DATA INFO -->
+
+                <div class="card panel">
+
+                    <div class="panel-title">
+                        <h3>Dataset Profile</h3>
+                        <span>Uploaded data</span>
+                    </div>
+
+                    <div
+                        class="insight-list"
+                        id="datasetInfo"
+                    ></div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <footer class="footer">
+        DemandPulse AI • AI Demand Forecasting & Inventory Optimization
+        <br>
+        Built by <strong>Shubham</strong>
+    </footer>
+
+</div>
+
+
+<script src="/static/script.js"></script>
+
+</body>
+</html>
