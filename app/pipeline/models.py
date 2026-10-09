@@ -1,3 +1,4 @@
+
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
@@ -13,7 +14,7 @@ def build_model(name, params=None):
             min_samples_leaf=params.get("min_samples_leaf", 1),
             max_features=params.get("max_features", 0.8),
             random_state=42,
-            n_jobs=-1
+            n_jobs=1
         )
 
     if name == "XGBoost":
@@ -27,7 +28,7 @@ def build_model(name, params=None):
             eval_metric="rmse",
             tree_method="hist",
             random_state=42,
-            n_jobs=-1
+            n_jobs=1
         )
 
     if name == "LightGBM":
@@ -40,7 +41,7 @@ def build_model(name, params=None):
             colsample_bytree=params.get("colsample_bytree", 0.8),
             min_child_samples=5,
             random_state=42,
-            n_jobs=-1,
+            n_jobs=1,
             verbosity=-1
         )
 
@@ -65,7 +66,6 @@ MODEL_CANDIDATES = {
             "max_features": 1.0
         }
     ],
-
     "XGBoost": [
         {
             "n_estimators": 250,
@@ -83,7 +83,6 @@ MODEL_CANDIDATES = {
             "learning_rate": 0.03
         }
     ],
-
     "LightGBM": [
         {
             "n_estimators": 250,
