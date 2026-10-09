@@ -6,10 +6,7 @@ let lastForecast = null;
 const $ = (id) => document.getElementById(id);
 
 
-// ============================================================
 // ERROR / UI HELPERS
-// ============================================================
-
 function showError(message) {
     const box = $("alertBox");
 
@@ -60,14 +57,9 @@ function formatNumber(value) {
     });
 }
 
-
-// ============================================================
 // HORIZON
-// ============================================================
-
 function setHorizon(days) {
     selectedHorizon = Number(days);
-
     document.querySelectorAll(".horizon button").forEach(button => {
         button.classList.toggle(
             "active",
@@ -76,24 +68,16 @@ function setHorizon(days) {
     });
 }
 
-
-// ============================================================
 // FILE UPLOAD
-// ============================================================
-
 $("fileInput").addEventListener("change", async function () {
-
     const file = this.files[0];
 
     if (!file) {
         return;
     }
-
     $("selectedFile").textContent =
         `Selected: ${file.name}`;
-
     $("selectedFile").style.display = "block";
-
     await uploadDataset(file);
 });
 
@@ -102,9 +86,7 @@ async function uploadDataset(file) {
 
     hideError();
     setLoading(true);
-
     const formData = new FormData();
-
     formData.append("file", file);
 
     try {
@@ -118,7 +100,6 @@ async function uploadDataset(file) {
         );
 
         const result = await response.json();
-
         if (!response.ok) {
             throw new Error(
                 result.detail ||
@@ -126,10 +107,7 @@ async function uploadDataset(file) {
             );
         }
 
-        // ====================================================
         // SAVE SESSION ID
-        // ====================================================
-
         if (!result.session_id) {
             throw new Error(
                 "Upload succeeded but server did not return a session ID."
@@ -137,7 +115,6 @@ async function uploadDataset(file) {
         }
 
         sessionId = result.session_id;
-
         // Save temporarily in browser too
         sessionStorage.setItem(
             "demandpulse_session_id",
@@ -145,33 +122,23 @@ async function uploadDataset(file) {
         );
 
 
-        // ====================================================
         // PRODUCT DROPDOWN
         // IMPORTANT:
         // NO "ALL STORES" HERE
-        // ====================================================
-
         populateProductSelect(
             $("productSelect"),
             result.products || []
         );
 
-
-        // ====================================================
         // STORE DROPDOWN
         // "ALL STORES" ONLY HERE
-        // ====================================================
 
         populateStoreSelect(
             $("storeSelect"),
             result.stores || []
         );
 
-
-        // ====================================================
         // COMPARISON PRODUCTS
-        // ====================================================
-
         populateProductSelect(
             $("compareProduct1"),
             result.products || []
@@ -182,11 +149,7 @@ async function uploadDataset(file) {
             result.products || []
         );
 
-
-        // ====================================================
         // DATASET INFORMATION
-        // ====================================================
-
         renderDatasetInfo(
             result.metadata || {}
         );
@@ -195,13 +158,8 @@ async function uploadDataset(file) {
             result.insights || {}
         );
 
-
-        // ====================================================
         // SHOW WORKSPACE
-        // ====================================================
-
         $("workspace").style.display = "block";
-
         window.scrollTo({
             top: $("workspace").offsetTop - 20,
             behavior: "smooth"
@@ -209,7 +167,6 @@ async function uploadDataset(file) {
 
 
     } catch (error) {
-
         console.error(
             "UPLOAD ERROR:",
             error
@@ -221,82 +178,52 @@ async function uploadDataset(file) {
         );
 
     } finally {
-
         setLoading(false);
     }
 }
 
-
-// ============================================================
 // PRODUCT DROPDOWN
-// ============================================================
-
 function populateProductSelect(select, values) {
-
     if (!select) return;
-
     select.innerHTML = "";
-
     if (!Array.isArray(values) || values.length === 0) {
-
         const option = document.createElement("option");
-
         option.value = "";
-
         option.textContent =
             "No products available";
-
         select.appendChild(option);
-
         return;
     }
 
 
     values.forEach(value => {
-
         const option =
             document.createElement("option");
-
         option.value = String(value);
-
         option.textContent = String(value);
-
         select.appendChild(option);
     });
 }
 
-
-// ============================================================
 // STORE DROPDOWN
-// ============================================================
-
 function populateStoreSelect(select, values) {
-
     if (!select) return;
-
     select.innerHTML = "";
-
 
     // IMPORTANT:
     // All Stores belongs ONLY to store dropdown
 
     const allOption =
         document.createElement("option");
-
     allOption.value = "All Stores";
-
     allOption.textContent = "All Stores";
-
     select.appendChild(allOption);
-
 
     if (!Array.isArray(values)) {
         return;
     }
 
-
     values.forEach(value => {
-
         const cleanValue =
             String(value).trim();
 
@@ -318,24 +245,15 @@ function populateStoreSelect(select, values) {
 
         const option =
             document.createElement("option");
-
         option.value = cleanValue;
-
         option.textContent = cleanValue;
-
         select.appendChild(option);
     });
 }
 
-
-// ============================================================
 // FORECAST
-// ============================================================
-
 async function runForecast() {
-
     if (!sessionId) {
-
         showError(
             "Please upload a dataset first."
         );
@@ -343,45 +261,29 @@ async function runForecast() {
         return;
     }
 
-
     hideError();
-
     setLoading(true);
-
 
     try {
 
-        // ====================================================
         // GET FORM VALUES
-        // ====================================================
-
         const product =
             $("productSelect").value;
 
         const store =
             $("storeSelect").value || "All Stores";
 
-
         if (!product) {
-
             throw new Error(
                 "Please select a product."
             );
         }
 
-
-        // ====================================================
         // BUILD REQUEST
-        // ====================================================
-
         const payload = {
-
             session_id: sessionId,
-
             product: product,
-
             store: store,
-
             horizon: Number(
                 selectedHorizon || 30
             ),
@@ -406,21 +308,16 @@ async function runForecast() {
         );
 
 
-        // ====================================================
         // API REQUEST
-        // ====================================================
-
         const response =
             await fetch(
                 "/api/forecast",
                 {
                     method: "POST",
-
                     headers: {
                         "Content-Type":
                             "application/json"
                     },
-
                     body:
                         JSON.stringify(payload)
                 }
@@ -430,17 +327,12 @@ async function runForecast() {
         const result =
             await response.json();
 
-
         console.log(
             "FORECAST RESPONSE:",
             result
         );
 
-
-        // ====================================================
         // SESSION ERROR
-        // ====================================================
-
         if (
             response.status === 404 &&
             String(result.detail || "")
@@ -449,7 +341,6 @@ async function runForecast() {
         ) {
 
             sessionId = null;
-
             sessionStorage.removeItem(
                 "demandpulse_session_id"
             );
@@ -459,13 +350,8 @@ async function runForecast() {
             );
         }
 
-
-        // ====================================================
         // OTHER API ERROR
-        // ====================================================
-
         if (!response.ok) {
-
             throw new Error(
                 result.detail ||
                 result.error ||
@@ -474,19 +360,12 @@ async function runForecast() {
         }
 
 
-        // ====================================================
         // SAVE RESULT
-        // ====================================================
-
         lastForecast = result;
 
 
-        // ====================================================
         // RENDER DASHBOARD
-        // ====================================================
-
         renderForecast(result);
-
         renderModelMetrics(
             result.model_metrics || {}
         );
@@ -495,16 +374,10 @@ async function runForecast() {
             result.inventory || {}
         );
 
-
-        // ====================================================
         // DOWNLOAD
-        // ====================================================
-
         $("downloadBtn").disabled = false;
 
-
     } catch (error) {
-
         console.error(
             "FORECAST ERROR:",
             error
@@ -516,27 +389,19 @@ async function runForecast() {
         );
 
     } finally {
-
         setLoading(false);
     }
 }
 
-
-// ============================================================
 // RENDER FORECAST
-// ============================================================
-
 function renderForecast(result) {
-
     $("modelValue").textContent =
         result.model || "—";
-
 
     $("segmentValue").textContent =
         result.segment
             ? `${result.segment} demand`
             : "—";
-
 
     $("wapeValue").textContent =
         result.metrics &&
@@ -544,14 +409,11 @@ function renderForecast(result) {
             ? `${formatNumber(result.metrics.WAPE)}%`
             : "—";
 
-
     const forecast =
         result.forecast || [];
 
-
     const history =
         result.history || [];
-
 
     const forecastTotal =
         forecast.reduce(
@@ -576,41 +438,28 @@ function renderForecast(result) {
             ) / history.length
             : 0;
 
-
     $("avgDemandValue").textContent =
         formatNumber(historyTotal);
 
-
     $("forecastDemandValue").textContent =
         formatNumber(forecastTotal);
-
 
     $("chartSubtitle").textContent =
         `${result.product || "Product"} • ` +
         `${result.horizon || selectedHorizon}-period forecast`;
 
-
     drawForecastChart(result);
 }
 
 
-// ============================================================
 // FORECAST CHART
-// ============================================================
-
 function drawForecastChart(result) {
-
     const canvas =
         $("forecastChart");
 
-
     if (!canvas) return;
-
-
     if (forecastChart) {
-
         forecastChart.destroy();
-
         forecastChart = null;
     }
 
@@ -618,13 +467,10 @@ function drawForecastChart(result) {
     const history =
         result.history || [];
 
-
     const forecast =
         result.forecast || [];
 
-
     const labels = [
-
         ...history.map(
             item => item.date
         ),
@@ -636,7 +482,6 @@ function drawForecastChart(result) {
 
 
     const historicalValues = [
-
         ...history.map(
             item =>
                 Number(
@@ -649,9 +494,7 @@ function drawForecastChart(result) {
         )
     ];
 
-
     const forecastValues = [
-
         ...history.map(
             () => null
         ),
@@ -666,11 +509,9 @@ function drawForecastChart(result) {
 
 
     const lowerValues = [
-
         ...history.map(
             () => null
         ),
-
         ...forecast.map(
             item =>
                 Number(
@@ -681,7 +522,6 @@ function drawForecastChart(result) {
 
 
     const upperValues = [
-
         ...history.map(
             () => null
         ),
@@ -701,24 +541,16 @@ function drawForecastChart(result) {
             {
 
                 type: "line",
-
                 data: {
-
                     labels: labels,
-
                     datasets: [
-
                         {
                             label:
                                 "Historical Demand",
-
                             data:
                                 historicalValues,
-
                             borderWidth: 2,
-
                             tension: 0.35,
-
                             pointRadius: 0
                         },
 
@@ -726,14 +558,10 @@ function drawForecastChart(result) {
                         {
                             label:
                                 "Forecast",
-
                             data:
                                 forecastValues,
-
                             borderWidth: 3,
-
                             tension: 0.35,
-
                             pointRadius: 2
                         },
 
@@ -741,14 +569,10 @@ function drawForecastChart(result) {
                         {
                             label:
                                 "80% Upper",
-
                             data:
                                 upperValues,
-
                             borderWidth: 1,
-
                             borderDash: [5, 5],
-
                             pointRadius: 0
                         },
 
@@ -756,42 +580,28 @@ function drawForecastChart(result) {
                         {
                             label:
                                 "80% Lower",
-
                             data:
                                 lowerValues,
-
                             borderWidth: 1,
-
                             borderDash: [5, 5],
-
                             pointRadius: 0
                         }
 
                     ]
                 },
 
-
                 options: {
-
                     responsive: true,
-
                     maintainAspectRatio: false,
-
-
                     interaction: {
-
                         mode: "index",
-
                         intersect: false
                     },
 
 
                     plugins: {
-
                         legend: {
-
                             labels: {
-
                                 color:
                                     "#91a0b5"
                             }
@@ -800,37 +610,28 @@ function drawForecastChart(result) {
 
 
                     scales: {
-
                         x: {
-
                             ticks: {
-
                                 color:
                                     "#718198",
-
                                 maxTicksLimit: 10
                             },
 
                             grid: {
-
                                 color:
                                     "rgba(255,255,255,.04)"
                             }
                         },
 
-
                         y: {
 
                             beginAtZero: true,
-
                             ticks: {
-
                                 color:
                                     "#718198"
                             },
 
                             grid: {
-
                                 color:
                                     "rgba(255,255,255,.04)"
                             }
@@ -843,34 +644,24 @@ function drawForecastChart(result) {
 }
 
 
-// ============================================================
 // MODEL METRICS
-// ============================================================
-
 function renderModelMetrics(metrics) {
-
     const container =
         $("modelList");
 
 
     if (!container) return;
-
-
     container.innerHTML = "";
-
 
     Object.entries(
         metrics || {}
     ).forEach(
         ([name, metric]) => {
-
             const row =
                 document.createElement("div");
 
-
             row.className =
                 "model-row";
-
 
             if (
                 lastForecast &&
@@ -880,11 +671,8 @@ function renderModelMetrics(metrics) {
                 row.classList.add("best");
             }
 
-
             row.innerHTML = `
-
                 <div>
-
                     <strong>
                         ${name}
                     </strong>
@@ -894,12 +682,9 @@ function renderModelMetrics(metrics) {
                             ? "<span> • Selected</span>"
                             : ""
                     }
-
                 </div>
 
-
                 <div>
-
                     <strong>
                         ${
                             formatNumber(
@@ -914,35 +699,25 @@ function renderModelMetrics(metrics) {
 
                 </div>
             `;
-
-
             container.appendChild(row);
         }
     );
 }
 
 
-// ============================================================
 // INVENTORY
-// ============================================================
-
 function renderInventory(inventory) {
-
     const status =
         $("inventoryStatus");
 
-
     if (!status) return;
-
 
     const risk =
         String(
             inventory.risk || "Low"
         ).toLowerCase();
 
-
     status.innerHTML = `
-
         <span class="risk risk-${risk}">
             ${inventory.status || "—"}
         </span>
@@ -1007,21 +782,13 @@ function renderInventory(inventory) {
             .join("");
 }
 
-
-// ============================================================
 // INSIGHTS
-// ============================================================
-
 function renderInsights(insights) {
-
     const topProduct =
         insights.top_products?.[0];
 
-
     $("insightList").innerHTML = `
-
         <div class="insight">
-
             <span>
                 Total Demand
             </span>
@@ -1110,12 +877,8 @@ function renderInsights(insights) {
 }
 
 
-// ============================================================
 // DATASET INFO
-// ============================================================
-
 function renderDatasetInfo(metadata) {
-
     $("datasetInfo").innerHTML = `
 
         <div class="insight">
@@ -1217,12 +980,8 @@ function renderDatasetInfo(metadata) {
 }
 
 
-// ============================================================
 // COMPARE PRODUCTS
-// ============================================================
-
 async function compareProducts() {
-
     if (!sessionId) {
 
         showError(
@@ -1370,10 +1129,7 @@ async function compareProducts() {
 }
 
 
-// ============================================================
 // DOWNLOAD FORECAST
-// ============================================================
-
 function downloadForecast() {
 
     if (!lastForecast) {
@@ -1472,10 +1228,7 @@ function downloadForecast() {
 }
 
 
-// ============================================================
 // RESET
-// ============================================================
-
 function resetApp() {
 
     sessionId = null;
@@ -1539,9 +1292,5 @@ function resetApp() {
     });
 }
 
-
-// ============================================================
 // INITIALIZE
-// ============================================================
-
 setHorizon(30);

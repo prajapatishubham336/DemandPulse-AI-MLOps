@@ -23,12 +23,7 @@ def calculate_inventory(
     reorder_point = lead_time_demand + safety_stock
 
     forecast_demand = float(np.sum(forecast))
-
-    reorder_quantity = max(
-        0,
-        int(np.ceil(forecast_demand + safety_stock - current_stock))
-    )
-
+    reorder_quantity = max(0, int(np.ceil(forecast_demand + safety_stock - current_stock)))
     stock_after_forecast = current_stock - forecast_demand
 
     if current_stock <= 0:
