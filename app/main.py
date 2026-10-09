@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app.pipeline.data_adapter import adapt_dataset
-from app.pipeline.forecastings import recursive_forecast
+from app.pipeline.forecasting import recursive_forecast
 from app.pipeline.inventory import calculate_inventory
 from app.pipeline.segmentation import classify_demand
 from app.services.session_store import create_session, get_session
