@@ -1,165 +1,132 @@
-
-import os
 import time
 
 import numpy as np
-from joblib import Parallel, delayed
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import TimeSeriesSplit
-from .models import build_model, MODEL_CANDIDATES
+
+from .models import build_model
 
 
-# SPEED SETTINGS
-MAX_CANDIDATES = int(os.environ.get("DP_MAX_CANDIDATES", "1"))
-PARALLEL_WORKERS = int(os.environ.get("DP_PARALLEL_WORKERS", "1"))
+# Lightweight settings for Render free instance
+MODEL_NAME = "LightGBM"
+
+MODEL_PARAMS = {
+    "n_estimators": 80,
+    "num_leaves": 15,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.9,
+    "colsample_bytree": 0.8,
+}
 
 
-# WAPE
+# WAPE METRIC
 def wape(y_true, y_pred):
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
+
     denominator = np.sum(np.abs(y_true))
+
     if denominator == 0:
         return 0.0
-    return float(np.sum(np.abs(y_true - y_pred)) / denominator)
+
+    return float(
+        np.sum(np.abs(y_true - y_pred)) / denominator
+    )
 
 
-# METRICS
+# MODEL EVALUATION
 def evaluate(y_true, y_pred):
     return {
         "WAPE": round(wape(y_true, y_pred) * 100, 2),
-        "MAE": round(float(mean_absolute_error(y_true, y_pred)), 2),
-        "RMSE": round(float(np.sqrt(mean_squared_error(y_true, y_pred))), 2)
+        "MAE": round(
+            float(mean_absolute_error(y_true, y_pred)), 2
+        ),
+        "RMSE": round(
+            float(np.sqrt(mean_squared_error(y_true, y_pred))), 2
+        ),
     }
 
 
-# HELPERS
-def _limit_threads(model, n_threads):
-    """Limit model threads to avoid CPU oversubscription."""
-    try:
-        model.set_params(n_jobs=n_threads)
-    except Exception:
-        pass
-    return model
-
-
-def _cv_score(model_name, params, X, y, splits, n_threads):
-    """Calculate time-series cross-validation WAPE."""
-    fold_scores = []
-    for train_idx, val_idx in splits:
-        model = _limit_threads(build_model(model_name, params), n_threads)
-        model.fit(X.iloc[train_idx], y[train_idx])
-        predictions = model.predict(X.iloc[val_idx])
-        fold_scores.append(wape(y[val_idx], predictions))
-    return float(np.mean(fold_scores))
-
-
-# FAST MODEL TUNING
+# LIGHTWEIGHT MODEL TRAINING
 def tune_models(X, y):
     started = time.perf_counter()
+
     X = X.copy()
     y = np.asarray(y, dtype=float)
 
-    if len(X) < 10:
-        return train_small_dataset(X, y)
+    if len(X) == 0:
+        raise ValueError("No training data available.")
 
-    try:
-        splits = list(TimeSeriesSplit(n_splits=2).split(X))
-    except Exception:
-        return train_small_dataset(X, y)
+    params = MODEL_PARAMS.copy()
+    metrics = None
 
-    jobs = []
-    for model_name, candidates in MODEL_CANDIDATES.items():
-        for params in candidates[:MAX_CANDIDATES]:
-            jobs.append((model_name, params))
+    # Time-series validation
+    if len(X) >= 10:
+        try:
+            splitter = TimeSeriesSplit(n_splits=2)
+            splits = list(splitter.split(X))
 
-    if not jobs:
-        return train_small_dataset(X, y)
+            train_idx, val_idx = splits[-1]
 
-    workers = max(1, min(PARALLEL_WORKERS, len(jobs)))
-    threads_each = 1 if workers > 1 else max(1, min(2, os.cpu_count() or 1))
+            validation_model = build_model(
+                MODEL_NAME, params
+            )
 
-    try:
-        scores = Parallel(n_jobs=workers, backend="threading")(
-            delayed(_cv_score)(name, params, X, y, splits, threads_each)
-            for name, params in jobs
-        )
-    except Exception as exc:
-        print(f"[TUNING] Parallel execution failed: {exc}. Retrying sequentially.")
-        scores = [
-            _cv_score(name, params, X, y, splits, 1)
-            for name, params in jobs
-        ]
+            validation_model.fit(
+                X.iloc[train_idx],
+                y[train_idx],
+            )
 
-    per_model = {}
-    for (name, params), score in zip(jobs, scores):
-        if name not in per_model or score < per_model[name][0]:
-            per_model[name] = (score, params)
+            predictions = validation_model.predict(
+                X.iloc[val_idx]
+            )
 
-    if not per_model:
-        return train_small_dataset(X, y)
+            metrics = evaluate(
+                y[val_idx],
+                predictions,
+            )
+
+        except (ValueError, IndexError) as exc:
+            print(
+                f"[TUNING] Validation fallback: {exc}"
+            )
+
+    # Fit final model using all available history
+    model = build_model(MODEL_NAME, params)
+    model.fit(X, y)
+
+    # Fallback metrics for small datasets
+    if metrics is None:
+        predictions = model.predict(X)
+        metrics = evaluate(y, predictions)
 
     results = {
-        name: {"WAPE": round(score * 100, 2), "params": params}
-        for name, (score, params) in per_model.items()
+        MODEL_NAME: {
+            **metrics,
+            "params": params,
+        }
     }
 
-    best_name = min(per_model, key=lambda name: per_model[name][0])
-    best_params = per_model[best_name][1]
-    final_model = build_model(best_name, best_params)
-    final_model.fit(X, y)
+    elapsed = time.perf_counter() - started
 
     print(
-        f"[TUNING] best={best_name} "
-        f"WAPE={results[best_name]['WAPE']}% "
-        f"| {len(jobs)} configs | "
-        f"{time.perf_counter() - started:.1f}s"
+        f"[TUNING] Model: {MODEL_NAME} | "
+        f"WAPE: {metrics['WAPE']}% | "
+        f"Time: {elapsed:.1f}s"
     )
 
     return {
-        "best_model": best_name,
-        "best_params": best_params,
-        "models": {best_name: final_model},
-        "metrics": results
+        "best_model": MODEL_NAME,
+        "best_params": params,
+        "models": {
+            MODEL_NAME: model,
+        },
+        "metrics": results,
     }
 
 
-# SMALL DATASET
+# BACKWARD-COMPATIBLE SMALL DATASET FUNCTION
 def train_small_dataset(X, y):
-    fitted_models = {}
-    results = {}
-    best_name = None
-    best_score = float("inf")
-    best_params = None
+    return tune_models(X, y)
 
-    for model_name, candidates in MODEL_CANDIDATES.items():
-        if not candidates:
-            continue
-        params = candidates[0]
-        model = build_model(model_name, params)
-        model.fit(X, y)
-        predictions = model.predict(X)
-        metrics = evaluate(y, predictions)
-        fitted_models[model_name] = model
-        results[model_name] = {
-            "WAPE": metrics["WAPE"],
-            "MAE": metrics["MAE"],
-            "RMSE": metrics["RMSE"],
-            "params": params
-        }
-
-        score = metrics["WAPE"] / 100
-        if score < best_score:
-            best_score = score
-            best_name = model_name
-            best_params = params
-
-    if best_name is None:
-        raise ValueError("No model candidates are configured.")
-
-    return {
-        "best_model": best_name,
-        "best_params": best_params,
-        "models": fitted_models,
-        "metrics": results
-    }

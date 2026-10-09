@@ -16,7 +16,7 @@ from .tuning import tune_models
 
 _TRAINED_CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
-_MAX_CACHED_MODELS = 32
+_MAX_CACHED_MODELS = 2
 
 
 def _history_key(history):
