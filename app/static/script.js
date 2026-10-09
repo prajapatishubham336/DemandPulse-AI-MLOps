@@ -68,6 +68,32 @@ function setHorizon(days) {
     });
 }
 
+// Read API responses safely. Render/proxy failures can return HTML instead of JSON.
+async function readApiResponse(response) {
+    const contentType = response.headers.get("content-type") || "";
+    const body = await response.text();
+    let result;
+
+    if (contentType.includes("application/json")) {
+        try {
+            result = body ? JSON.parse(body) : {};
+        } catch (_) {
+            throw new Error(`Server returned invalid JSON (HTTP ${response.status}). Please retry.`);
+        }
+    } else {
+        const shortBody = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 180);
+        if (!response.ok) {
+            throw new Error(`Server error (HTTP ${response.status}). ${shortBody || "Please retry in a minute."}`);
+        }
+        throw new Error(`Server returned an unexpected response (HTTP ${response.status}). Please retry.`);
+    }
+
+    if (!response.ok) {
+        throw new Error(result.detail || result.message || `Request failed (HTTP ${response.status}).`);
+    }
+    return result;
+}
+
 // FILE UPLOAD
 $("fileInput").addEventListener("change", async function () {
     const file = this.files[0];
@@ -99,13 +125,7 @@ async function uploadDataset(file) {
             }
         );
 
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(
-                result.detail ||
-                "Dataset upload failed."
-            );
-        }
+        const result = await readApiResponse(response);
 
         // SAVE SESSION ID
         if (!result.session_id) {
@@ -324,8 +344,7 @@ async function runForecast() {
             );
 
 
-        const result =
-            await response.json();
+        const result = await readApiResponse(response);
 
         console.log(
             "FORECAST RESPONSE:",
@@ -1050,8 +1069,7 @@ async function compareProducts() {
             );
 
 
-        const result =
-            await response.json();
+        const result = await readApiResponse(response);
 
 
         if (!response.ok) {
