@@ -30,6 +30,14 @@ The application includes data upload and validation, preprocessing, feature engi
 
 The goal is to turn historical demand data into useful insights that can support inventory planning, product analysis, and business decision-making.
 
+---
+
+🌐 **Live Demo:** [DemandPulse AI MLOps](https://demandpulse-ai-mlops.onrender.com/)
+
+📘 **API Documentation:** [Swagger UI](https://demandpulse-ai-mlops.onrender.com/docs)
+
+---
+
 ## ✨ Features
 
 * **📈 Demand Data Upload:** Upload demand datasets for analysis through the application.
