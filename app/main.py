@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -105,18 +106,37 @@ async def upload_dataset(
 
     file_path = UPLOAD_DIR / file_id
 
-    # Save uploaded file
-    content = await file.read()
-    file_path.write_bytes(content)
-
-    # Adapt dataset
+    # Stream the upload to disk in small chunks instead of keeping the
+    # complete file in RAM. This is safer on small Render instances.
     try:
-        data, metadata = adapt_dataset(file_path)
-    except Exception as exc:
-
+        total_bytes = 0
+        max_upload_bytes = 50 * 1024 * 1024  # 50 MB
+        with file_path.open("wb") as destination:
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1 MB chunks
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > max_upload_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="File is too large. Please upload a file under 50 MB."
+                    )
+                destination.write(chunk)
+    except Exception:
         if file_path.exists():
             file_path.unlink()
+        raise
+    finally:
+        await file.close()
 
+    # Excel/CSV parsing can take time. Run it in a worker thread so the
+    # server can continue responding to other requests while processing.
+    try:
+        data, metadata = await run_in_threadpool(adapt_dataset, file_path)
+    except Exception as exc:
+        if file_path.exists():
+            file_path.unlink()
         raise HTTPException(
             status_code=400,
             detail=f"Invalid Dataset: {str(exc)}"
@@ -129,7 +149,7 @@ async def upload_dataset(
     stores = sorted(data["store"].dropna().astype(str).unique().tolist())
 
     # Insights
-    insights = build_insights(data)
+    insights = await run_in_threadpool(build_insights, data)
 
     # Metadata
     metadata = {

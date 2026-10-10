@@ -5,7 +5,6 @@ let lastForecast = null;
 
 const $ = (id) => document.getElementById(id);
 
-
 // ERROR / UI HELPERS
 function showError(message) {
     const box = $("alertBox");
