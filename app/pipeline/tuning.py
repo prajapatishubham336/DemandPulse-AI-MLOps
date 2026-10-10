@@ -20,8 +20,9 @@ def evaluate(y_true, y_pred):
     }
 
 
+
 def tune_models(X, y):
-    """Evaluate Random Forest, XGBoost and LightGBM sequentially, then refit winner."""
+    """Evaluate forecasting models using time-series CV, then refit winner."""
     started = time.perf_counter()
     X = X.copy()
     y = np.asarray(y, dtype=float)
@@ -29,28 +30,45 @@ def tune_models(X, y):
 
     if len(X) >= 10:
         splits = list(TimeSeriesSplit(n_splits=2).split(X))
+
         for model_name, candidates in MODEL_CANDIDATES.items():
             if not candidates:
                 continue
+
             params = candidates[0]
-            fold_scores = []
-            # Sequential fitting and single-threaded models avoid CPU oversubscription.
+            fold_wape, fold_mae, fold_rmse = [], [], []
+
             for train_idx, val_idx in splits:
                 model = build_model(model_name, params)
                 model.fit(X.iloc[train_idx], y[train_idx])
                 pred = model.predict(X.iloc[val_idx])
-                fold_scores.append(wape(y[val_idx], pred))
-            scores[model_name] = float(np.mean(fold_scores))
-            results[model_name] = {"WAPE": round(scores[model_name] * 100, 2), "params": params}
+
+                fold_wape.append(wape(y[val_idx], pred))
+                fold_mae.append(
+                    mean_absolute_error(y[val_idx], pred)
+                )
+                fold_rmse.append(
+                    np.sqrt(mean_squared_error(y[val_idx], pred))
+                )
+
+            scores[model_name] = float(np.mean(fold_wape))
+            results[model_name] = {
+                "WAPE": round(float(np.mean(fold_wape)) * 100, 2),
+                "MAE": round(float(np.mean(fold_mae)), 2),
+                "RMSE": round(float(np.mean(fold_rmse)), 2),
+                "params": params,
+            }
+
     else:
-        # Small dataset fallback: fit each model once and compare its training metrics.
         for model_name, candidates in MODEL_CANDIDATES.items():
             if not candidates:
                 continue
+
             params = candidates[0]
             model = build_model(model_name, params)
             model.fit(X, y)
             pred = model.predict(X)
+
             metrics = evaluate(y, pred)
             scores[model_name] = metrics["WAPE"] / 100
             results[model_name] = {**metrics, "params": params}
@@ -61,12 +79,21 @@ def tune_models(X, y):
 
     best_name = min(scores, key=scores.get)
     best_params = MODEL_CANDIDATES[best_name][0]
+
     if best_name not in fitted_models:
         best_model = build_model(best_name, best_params)
         best_model.fit(X, y)
         fitted_models[best_name] = best_model
 
-    print(f"[TUNING] best={best_name} WAPE={results[best_name]['WAPE']}% | compared={list(scores)} | {time.perf_counter()-started:.1f}s")
+    print(
+        f"[TUNING] best={best_name} "
+        f"WAPE={results[best_name]['WAPE']}% | "
+        f"MAE={results[best_name]['MAE']} | "
+        f"RMSE={results[best_name]['RMSE']} | "
+        f"compared={list(scores)} | "
+        f"{time.perf_counter() - started:.1f}s"
+    )
+
     return {
         "best_model": best_name,
         "best_params": best_params,

@@ -1,4 +1,4 @@
-import os
+import logging
 import uuid
 import traceback
 from pathlib import Path
@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.pipeline.data_adapter import adapt_dataset
 from app.pipeline.forecasting import recursive_forecast
@@ -17,40 +17,34 @@ from app.pipeline.inventory import calculate_inventory
 from app.pipeline.segmentation import classify_demand
 from app.services.session_store import create_session, get_session
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("demandpulse")
 
-# BASE DIRECTORIES
 BASE_DIR = Path(__file__).resolve().parent
-
 UPLOAD_DIR = BASE_DIR.parent / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+ALLOWED_HORIZONS = {7, 30, 60, 90}
 
-
-# FASTAPI APP
 app = FastAPI(
     title="DemandPulse AI",
-    version="1.0.0",
-    description="AI Demand Forecasting & Inventory Optimization Platform"
+    version="1.1.0",
+    description="AI Demand Forecasting & Inventory Optimization Platform",
 )
 
-# STATIC FILES
-app.mount(
-    "/static",
-    StaticFiles(directory=str(BASE_DIR / "static")),
-    name="static"
-)
-
-# TEMPLATES
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-# REQUEST MODELS
+
 class ForecastRequest(BaseModel):
     session_id: str
     product: str | None = None
     store: str | None = None
     horizon: int = 30
-    current_stock: float = 0
-    lead_time_days: int = 7
-    safety_stock_days: int = 3
+    current_stock: float = Field(default=0, ge=0)
+    lead_time_days: int = Field(default=7, ge=0, le=365)
+    safety_stock_days: int = Field(default=3, ge=0, le=365)
 
 
 class CompareRequest(BaseModel):
@@ -61,323 +55,208 @@ class CompareRequest(BaseModel):
     horizon: int = 30
 
 
-# HOME
 @app.get("/", response_class=HTMLResponse)
 async def home():
-
     html_path = BASE_DIR / "templates" / "index.html"
+    if not html_path.exists():
+        raise HTTPException(status_code=500, detail="Dashboard template is missing.")
     return html_path.read_text(encoding="utf-8")
 
 
-# HEALTH CHECK
 @app.get("/health")
 async def health():
+    return {"status": "ok", "service": "DemandPulse AI"}
 
-    return {
-        "status": "ok",
-        "service": "DemandPulse AI"
-    }
 
-# DATASET UPLOAD
-@app.post("/api/upload")
-async def upload_dataset(
-    file: UploadFile = File(...)):
-
-    # Validate filename
-    if not file.filename:
+def _validate_horizon(horizon: int):
+    if horizon not in ALLOWED_HORIZONS:
         raise HTTPException(
-            status_code=400,
-            detail="Please select a CSV or Excel file."
+            status_code=422,
+            detail=f"horizon must be one of {sorted(ALLOWED_HORIZONS)}",
         )
 
-    # Validate extension
-    extension = Path(file.filename).suffix.lower()
-    if extension not in [".csv",".xlsx",".xls"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file type. Upload CSV, XLSX or XLS."
-        )
 
-    # Create unique file
-    file_id = (
-        f"{uuid.uuid4().hex}"
-        f"{extension}"
+def _normalise_all_store(store):
+    all_values = {"", "all", "all stores", "all_store", "all_stores", "total", "none"}
+    if store is None or str(store).strip().casefold() in all_values:
+        return None
+    return str(store).strip()
+
+
+def select_series(data, product=None, store=None):
+    df = data.copy()
+    if product:
+        df = df[df["product"].astype(str).str.strip().str.casefold()
+                == str(product).strip().casefold()]
+
+    selected_store = _normalise_all_store(store)
+    if selected_store:
+        df = df[df["store"].astype(str).str.strip().str.casefold()
+                == selected_store.casefold()]
+
+    if df.empty:
+        raise ValueError("No demand history found for the selected product/store.")
+
+    result = (
+        df.groupby("date", as_index=False)
+        .agg(quantity=("quantity", "sum"), price=("price", "mean"),
+             discount=("discount", "mean"))
+        .sort_values("date")
+        .reset_index(drop=True)
     )
+    result["product"] = str(product or "ALL")
+    result["store"] = str(selected_store or "ALL")
+    return result[["date", "quantity", "product", "store", "price", "discount"]]
 
-    file_path = UPLOAD_DIR / file_id
 
-    # Stream the upload to disk in small chunks instead of keeping the
-    # complete file in RAM. This is safer on small Render instances.
+@app.post("/api/upload")
+async def upload_dataset(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Please select a CSV or Excel file.")
+
+    extension = Path(file.filename).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Invalid file type. Upload CSV, XLSX or XLS.")
+
+    file_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{extension}"
+    total_bytes = 0
+
     try:
-        total_bytes = 0
-        max_upload_bytes = 50 * 1024 * 1024  # 50 MB
         with file_path.open("wb") as destination:
             while True:
-                chunk = await file.read(1024 * 1024)  # 1 MB chunks
+                chunk = await file.read(1024 * 1024)
                 if not chunk:
                     break
                 total_bytes += len(chunk)
-                if total_bytes > max_upload_bytes:
+                if total_bytes > MAX_UPLOAD_BYTES:
                     raise HTTPException(
                         status_code=413,
-                        detail="File is too large. Please upload a file under 50 MB."
+                        detail="File is too large. Please upload a file under 50 MB.",
                     )
                 destination.write(chunk)
     except Exception:
-        if file_path.exists():
-            file_path.unlink()
+        file_path.unlink(missing_ok=True)
         raise
     finally:
         await file.close()
 
-    # Excel/CSV parsing can take time. Run it in a worker thread so the
-    # server can continue responding to other requests while processing.
     try:
-        data, metadata = await run_in_threadpool(adapt_dataset, file_path)
+        data, _source_metadata = await run_in_threadpool(adapt_dataset, file_path)
+        required = {"date", "quantity", "product", "store", "price", "discount"}
+        missing = required.difference(data.columns)
+        if missing:
+            raise ValueError(f"Dataset is missing required columns: {sorted(missing)}")
+        if data.empty:
+            raise ValueError("The uploaded dataset contains no usable rows.")
+
+        products = sorted(data["product"].dropna().astype(str).unique().tolist())
+        stores = sorted(data["store"].dropna().astype(str).unique().tolist())
+        insights_result = await run_in_threadpool(build_insights, data)
+
+        metadata = {
+            "filename": file.filename,
+            "rows": int(len(data)),
+            "products": int(data["product"].nunique()),
+            "stores": int(data["store"].nunique()),
+            "start_date": str(pd.to_datetime(data["date"]).min().date()),
+            "end_date": str(pd.to_datetime(data["date"]).max().date()),
+        }
+        session_id = create_session(data, metadata)
+
+        preview = data.head(10).copy()
+        preview["date"] = preview["date"].astype(str)
+        logger.info("Dataset uploaded: rows=%s products=%s stores=%s",
+                    len(data), len(products), len(stores))
+        return {
+            "success": True,
+            "session_id": session_id,
+            "metadata": metadata,
+            "products": products,
+            "stores": stores,
+            "preview": preview.to_dict(orient="records"),
+            "insights": insights_result,
+        }
+    except HTTPException:
+        file_path.unlink(missing_ok=True)
+        raise
     except Exception as exc:
-        if file_path.exists():
-            file_path.unlink()
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid Dataset: {str(exc)}"
-        )
+        logger.exception("Dataset processing failed")
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Invalid dataset: {str(exc)}") from exc
 
-    # Products
-    products = sorted(data["product"].dropna().astype(str).unique().tolist())
 
-    # Stores
-    stores = sorted(data["store"].dropna().astype(str).unique().tolist())
-
-    # Insights
-    insights = await run_in_threadpool(build_insights, data)
-
-    # Metadata
-    metadata = {
-        "filename": file.filename,
-        "rows": int(len(data)),
-        "products": int(data["product"].nunique()),
-        "stores": int(data["store"].nunique()),
-        "start_date": str(data["date"].min().date()),
-        "end_date": str(data["date"].max().date())}
-
-    # Create session
-    session_id = create_session(data, metadata)
-
-    # Preview
-    preview = data.head(10).copy()
-    preview["date"] = (preview["date"].astype(str))
-
-    # Response
-    return {
-        "success": True,
-        "session_id": session_id,
-        "metadata": metadata,
-        "products": products,
-        "stores": stores,
-        "preview": preview.to_dict(orient="records"),
-        "insights": insights
-    }
-
-# SELECT SERIES
-def select_series(data, product=None, store=None):
-    df = data.copy()
-
-    # Product filter
-    if product:
-        df = df[
-            df["product"]
-            .astype(str)
-            .str.strip()
-            .str.casefold()
-            == str(product).strip().casefold()
-        ]
-
-    # Store filter
-    all_store_values = {"all","all stores","all_store","all_stores", "total", "none", ""}
-    if (
-        store
-        and str(store).strip().casefold()
-        not in all_store_values):
-
-        df = df[
-            df["store"]
-            .astype(str)
-            .str.strip()
-            .str.casefold()
-            == str(store).strip().casefold()
-        ]
-
-    # Empty check
-    if df.empty:
-        raise ValueError(
-            "No demand history found "
-            "for the selected product/store."
-        )
-
-    # Group time series
-    group_cols = ["date"]
-    result = (
-        df.groupby(group_cols, as_index=False)
-        .agg({
-            "quantity": "sum",
-            "price": "mean",
-            "discount": "mean"
-        })
-
-        .sort_values("date")
-    )
-
-    # Add product/store
-    result["product"] = str(product or "ALL")
-    result["store"] = str(store or "ALL")
-
-    # Return
-    return result[["date","quantity","product","store","price", "discount"]]
-
-# FORECAST API
 @app.post("/api/forecast")
 async def forecast(request: ForecastRequest):
+    _validate_horizon(request.horizon)
     try:
-        # GET SESSION
-        try:
-            session = get_session(request.session_id)
+        session = get_session(request.session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session expired. Please upload the dataset again.") from exc
 
-        except KeyError:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "Session expired. "
-                    "Please upload the dataset again."
-                )
-            )
+    try:
         data = session["data"].copy()
+        data["product"] = data["product"].astype(str).str.strip()
+        data["store"] = data["store"].astype(str).str.strip()
 
-        # CLEAN PRODUCT
-        data["product"] = (data["product"].astype(str).str.strip())
+        product = str(request.product or data["product"].iloc[0]).strip()
+        store = str(request.store or "All Stores").strip()
+        product_mask = data["product"].str.casefold() == product.casefold()
+        filtered = data.loc[product_mask].copy()
 
-        # CLEAN STORE
-        data["store"] = (data["store"].astype(str).str.strip())
+        selected_store = _normalise_all_store(store)
+        if selected_store:
+            filtered = filtered[
+                filtered["store"].str.casefold() == selected_store.casefold()
+            ]
 
-       # PRODUCT
-        product = request.product
-
-        if not product:
-            product = (data["product"].iloc[0])
-
-        product = str(product).strip()
-
-        # PRODUCT FILTER
-        product_mask = (data["product"].str.casefold() == product.casefold())
-        filtered = data[product_mask].copy()
-
-        # STORE
-        store = request.store
-        if not store:
-            store = "All Stores"
-
-        store = str(store).strip()
-
-        # ALL STORE VALUES
-        all_store_values = {"all","all stores","all_store", "all_stores", "total","none", ""}
-
-        # STORE FILTER
-        if (store.casefold() not in all_store_values):
-            filtered = filtered[filtered["store"].str.casefold() == store.casefold()]
-
-        # DEBUG
-        print("\nFORECAST DEBUG ")
-        print("Requested product:",product)
-        print("Requested store:", store)
-        print("Total dataset rows:", len(data))
-        print("Product rows:", len(data[product_mask]))
-        print("Filtered rows:",len(filtered))
-        print("Available products:", data["product"].unique()[:20].tolist())
-        print("Available stores:", data["store"].unique()[:20].tolist())
-
-        
-        # NO DATA CHECK
         if filtered.empty:
-            raise ValueError(
-                "No demand history found "
-                "for the selected product/store."
-            )
+            raise ValueError("No demand history found for the selected product/store.")
 
-        # CREATE TIME SERIES
-        history = (filtered.groupby(["date", "product", "store"], as_index=False)
-            .agg({"quantity": "sum",
-                "price": "mean",
-                "discount": "mean"
-            }).sort_values("date").reset_index(drop=True))
+        history = (
+            filtered.groupby(["date", "product", "store"], as_index=False)
+            .agg(quantity=("quantity", "sum"), price=("price", "mean"),
+                 discount=("discount", "mean"))
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
 
-
-        # ALL STORES:
+        # Aggregate to one row per date when the user selected all stores.
         if history["date"].duplicated().any():
-            history = (history.groupby("date", as_index=False)
-                .agg({
-                    "quantity": "sum",
-                    "price": "mean",
-                    "discount": "mean",
-                    "product": "first",
-                    "store": "first"
-                })
+            history = (
+                history.groupby("date", as_index=False)
+                .agg(quantity=("quantity", "sum"), price=("price", "mean"),
+                     discount=("discount", "mean"), product=("product", "first"),
+                     store=("store", "first"))
                 .sort_values("date")
                 .reset_index(drop=True)
             )
             history["store"] = store
 
-        # HISTORY CHECK
-        if history.empty:
-            raise ValueError(
-                "No demand history found "
-                "after grouping the selected data."
-            )
-
         if len(history) < 5:
             raise ValueError(
-                "Not enough historical data. "
-                f"Only {len(history)} "
-                "time points found."
+                f"Not enough historical data: only {len(history)} time points found."
             )
 
-        # FORECAST
-        result = recursive_forecast(history, request.horizon)
+        # Model fitting/prediction runs outside the ASGI event loop.
+        result = await run_in_threadpool(recursive_forecast, history, request.horizon)
+        forecast_df = result.get("forecast")
+        if not isinstance(forecast_df, pd.DataFrame) or "forecast" not in forecast_df.columns:
+            raise ValueError("Forecast model returned an invalid forecast dataframe.")
 
-        # VALIDATE FORECAST RESULT
-        if not isinstance(result, dict):
-            raise ValueError(
-                "Forecast model returned "
-                "an invalid result."
-            )
-        if "forecast" not in result:
-            raise KeyError(
-                "Forecast result does not "
-                "contain 'forecast'."
-            )
-        forecast_df = result["forecast"]
-
-        if "forecast" not in forecast_df.columns:
-            raise KeyError(
-                "Forecast dataframe does not "
-                "contain 'forecast' column."
-            )
-
-        # INVENTORY
-        inventory = calculate_inventory(
+        inventory = await run_in_threadpool(
+            calculate_inventory,
             history["quantity"].values,
             forecast_df["forecast"].values,
-            current_stock=(request.current_stock),
-            lead_time_days=(request.lead_time_days),
-            safety_stock_days=(request.safety_stock_days))
+            current_stock=request.current_stock,
+            lead_time_days=request.lead_time_days,
+            safety_stock_days=request.safety_stock_days,
+        )
 
-        # FORECAST DATA
-        forecast_rows = (forecast_df.copy())
-        forecast_rows["date"] = (forecast_rows["date"].astype(str))
+        forecast_rows = forecast_df.copy()
+        forecast_rows["date"] = forecast_rows["date"].astype(str)
+        history_rows = history.tail(120).copy()
+        history_rows["date"] = history_rows["date"].astype(str)
 
-        # HISTORY
-        history_rows = (history.tail(120).copy())
-        history_rows["date"] = (history_rows["date"].astype(str))
-
-        # RESPONSE
         return {
             "success": True,
             "product": product,
@@ -388,138 +267,89 @@ async def forecast(request: ForecastRequest):
             "frequency": result.get("frequency"),
             "rows_used": result.get("rows_used"),
             "metrics": result.get("selected_metrics", {}),
-            "model_metrics": result.get("model_metrics",{}),
+            "model_metrics": result.get("model_metrics", {}),
             "inventory": inventory,
-            "forecast": (forecast_rows.to_dict(orient="records")),
-            "history": (history_rows[["date", "quantity"]].to_dict(orient="records"))}
-
-    # HTTP ERROR
+            "forecast": forecast_rows.to_dict(orient="records"),
+            "history": history_rows[["date", "quantity"]].to_dict(orient="records"),
+        }
     except HTTPException:
         raise
-
-    # REAL FORECAST ERROR
     except Exception as exc:
-
-        print("\n FORECAST ERROR ")
-        print(
-            "Exception type:",
-            type(exc).__name__
-        )
-
-        print("Exception:", str(exc))
-        traceback.print_exc()
-
+        logger.exception("Forecast request failed")
+        # A genuine server-side model/runtime failure should not be mislabeled as a 400.
         raise HTTPException(
-            status_code=400,
-            detail=(
-                "Forecast failed: "
-                f"{type(exc).__name__}: "
-                f"{str(exc)}"
-            )
-        )
+            status_code=500,
+            detail=f"Forecast failed ({type(exc).__name__}). Check server logs for details.",
+        ) from exc
 
-# COMPARE PRODUCTS
+
 @app.post("/api/compare")
 async def compare_products(request: CompareRequest):
+    _validate_horizon(request.horizon)
+    try:
+        session = get_session(request.session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session expired. Please upload the dataset again.") from exc
 
     try:
-        # GET SESSION
-        try:
-            session = get_session(request.session_id)
-        except KeyError:
-
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "Session expired. "
-                    "Please upload the dataset again."
-                )
-            )
         data = session["data"]
         results = []
-
-        # PROCESS PRODUCTS
         for product in [request.product1, request.product2]:
             history = select_series(data, product, request.store or "ALL")
-            result = recursive_forecast(history, request.horizon)
+            if len(history) < 5:
+                raise ValueError(f"Not enough historical data for product '{product}'.")
+            result = await run_in_threadpool(recursive_forecast, history, request.horizon)
+            forecast_df = result["forecast"]
             results.append({
                 "product": product,
                 "model": result.get("model"),
                 "segment": result.get("segment"),
                 "forecast": (
-                    result["forecast"][["date","forecast"]]
-                    .assign(date=lambda x: x["date"].astype(str))
-                    .to_dict(orient="records"))
+                    forecast_df[["date", "forecast"]]
+                    .assign(date=lambda frame: frame["date"].astype(str))
+                    .to_dict(orient="records")
+                ),
             })
-
-        # RESPONSE
-        return {
-            "success": True,
-            "products": results
-        }
-
-    # HTTP ERROR
+        return {"success": True, "products": results}
     except HTTPException:
         raise
-
-    # COMPARE ERROR
     except Exception as exc:
-        print("\n COMPARE ERROR ")
-        print("Exception type:", type(exc).__name__)
-        print("Exception:", str(exc))
-        traceback.print_exc()
-
+        logger.exception("Compare request failed")
         raise HTTPException(
-            status_code=400,
-            detail=(
-                "Compare failed: "
-                f"{type(exc).__name__}: "
-                f"{str(exc)}"
-            )
-        )
+            status_code=500,
+            detail=f"Compare failed ({type(exc).__name__}). Check server logs for details.",
+        ) from exc
 
-# INSIGHTS
+
 @app.get("/api/insights/{session_id}")
 async def insights(session_id: str):
-
     try:
         session = get_session(session_id)
-        return build_insights(session["data"])
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session expired. Please upload the dataset again.") from exc
+    try:
+        return await run_in_threadpool(build_insights, session["data"])
+    except Exception as exc:
+        logger.exception("Insights request failed")
+        raise HTTPException(status_code=500, detail="Unable to build insights. Check server logs.") from exc
 
-    except KeyError:
-        raise HTTPException(
-            status_code=404,
-            detail="Session expired."
-        )
 
-# BUILD INSIGHTS
 def build_insights(data):
-
-    # PRODUCT TOTALS
-    product_totals = (data.groupby("product")["quantity"].sum().sort_values(ascending=False))
-
-    # SEGMENTS
+    product_totals = data.groupby("product")["quantity"].sum().sort_values(ascending=False)
     segments = {}
-
-    # EACH PRODUCT
     for product in data["product"].unique():
         product_data = data[data["product"] == product]
-
-        # TIME SERIES
-        series = (
-            product_data.groupby("date")["quantity"].sum().sort_index())
-
-        # CLASSIFY
+        series = product_data.groupby("date")["quantity"].sum().sort_index()
         segment = classify_demand(series.values)
-        segments[segment] = (segments.get(segment, 0) + 1)
+        segments[segment] = segments.get(segment, 0) + 1
 
-    # RESPONSE
     return {
         "total_demand": round(float(data["quantity"].sum()), 2),
         "average_demand": round(float(data["quantity"].mean()), 2),
         "max_demand": round(float(data["quantity"].max()), 2),
-        "top_products": [{"product": str(index), "demand": round(float(value), 2)}
-
-            for index, value in product_totals.head(10).items()],
-        "segments": segments
+        "top_products": [
+            {"product": str(index), "demand": round(float(value), 2)}
+            for index, value in product_totals.head(10).items()
+        ],
+        "segments": segments,
     }
